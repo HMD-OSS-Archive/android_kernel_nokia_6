@@ -3,9 +3,11 @@
 #include <linux/string.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/io.h>
 #include <fih/hwid.h>
 #include "fih_ramtable.h"
 #include "fih_hwcfg.h"
+#include <linux/utsname.h>
 
 static unsigned int my_proc_addr = FIH_HWCFG_MEM_ADDR;
 static unsigned int my_proc_size = FIH_HWCFG_MEM_SIZE;

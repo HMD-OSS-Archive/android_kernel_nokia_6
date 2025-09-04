@@ -464,5 +464,5 @@ endchoice
 config MODULE_SIG_FIH_KEY_PATH
 	string
 	depends on MODULE_SIG_FIH
-	default "../../../../../../kernel/scripts/fih" if MODULE_SIG_KEY_IN_NORMAL
+	default "../../../../../../../kernel/msm-3.18/scripts/fih" if MODULE_SIG_KEY_IN_NORMAL
 	default "../../../mach/QCOM8937/kernel/linux/scripts/fih" if MODULE_SIG_KEY_IN_FTM
