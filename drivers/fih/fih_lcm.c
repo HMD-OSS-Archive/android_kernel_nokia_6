@@ -64,7 +64,7 @@ static ssize_t fih_lcm_write_color_mode(struct file *file, const char __user *bu
 	}
 
 	//Display-CE&CTWillNotBeExecutedUntilPanelInitIsDone-01*{_20150428
-	if(strstr(saved_command_line, "androidboot.mode=0")!=NULL)
+	if(strstr(saved_command_line, "androidboot.fihmode=0")!=NULL)  //Display-FixCABCCanNotWorkInAndroidO-00*_20171020
 	{
 		res = fih_set_ce(simple_strtoull(tmp, NULL, 0));
 		if (res < 0)
@@ -114,8 +114,8 @@ static ssize_t fih_lcm_write_color_temperature(struct file *file, const char __u
 		return -EFAULT;
 	}
 
-	//Display-CE&CTWillNotBeExecutedUntilPanelInitIsDone-01*{_20150428
-	if(strstr(saved_command_line, "androidboot.mode=0")!=NULL)
+	//CE&CTWillNotBeExecutedUntilPanelInitIsDone-01*{_20150428
+	if(strstr(saved_command_line, "androidboot.fihmode=0")!=NULL)	//FixCABCCanNotWorkInAndroidO-00*_20171020
 	{
 		res = fih_set_ct(simple_strtoull(tmp, NULL, 0));
 		if (res < 0)
@@ -165,8 +165,8 @@ static ssize_t fih_lcm_write_cabc_settings(struct file *file, const char __user 
 		return -EFAULT;
 	}
 
-	//Display-CE&CTWillNotBeExecutedUntilPanelInitIsDone-01*{_20150428
-	if(strstr(saved_command_line, "androidboot.mode=0")!=NULL)
+	//CE&CTWillNotBeExecutedUntilPanelInitIsDone-01*{_20150428
+	if(strstr(saved_command_line, "androidboot.fihmode=0")!=NULL)	//FixCABCCanNotWorkInAndroidO-00*_20171020
 	{
 		res = fih_set_cabc(simple_strtoull(tmp, NULL, 0));
 		if (res < 0)

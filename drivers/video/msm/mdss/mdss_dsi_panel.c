@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -24,8 +24,9 @@
 #include <linux/string.h>
 #include <linux/device.h>
 #include "mdss_dsi.h"
+#ifdef TARGET_HW_MDSS_HDMI
 #include "mdss_dba_utils.h"
-
+#endif
 #define DT_CMD_HDR 6
 #define MIN_REFRESH_RATE 48
 #define DEFAULT_MDP_TRANSFER_TIME 14000
@@ -64,6 +65,13 @@ extern unsigned long ct_set;
 extern int SendCABCOnlyAfterResume;
 extern unsigned long cabc_set;
 //Display-ImplementCECTCABC-00+}_20160126
+
+//Display-FixCeCtNotWorkInAndroidO-FixedValueSinceNoUIForCeCtAlready-00+{_20171107
+//Set feault value for CE and CT because framework will not send default value in Android O
+static unsigned long default_ce = 1;
+static unsigned long default_ct = 6500;
+static int SetDefaultCeCtRightAfterBoot = 1;
+//Display-FixCeCtNotWorkInAndroidO-FixedValueSinceNoUIForCeCtAlready-00+}_20171107
 
 //Display-SendCECTCABCBeforeInit-00+{_20161213
 extern int SendCEBeforeInit;
@@ -211,6 +219,25 @@ int mdss_dsi_panel_cmd_read(struct mdss_dsi_ctrl_pdata *ctrl, char cmd0,
 	return mdss_dsi_cmdlist_put(ctrl, &cmdreq);
 }
 
+static void mdss_dsi_panel_apply_settings(struct mdss_dsi_ctrl_pdata *ctrl,
+				struct dsi_panel_cmds *pcmds)
+{
+	struct dcs_cmd_req cmdreq;
+	struct mdss_panel_info *pinfo;
+
+	pinfo = &(ctrl->panel_data.panel_info);
+	if ((pinfo->dcs_cmd_by_left) && (ctrl->ndx != DSI_CTRL_LEFT))
+		return;
+
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	cmdreq.cmds = pcmds->cmds;
+	cmdreq.cmds_cnt = pcmds->cmd_cnt;
+	cmdreq.flags = CMD_REQ_COMMIT;
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
+}
+
 int mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,	//Display-EnhanceErrorHandling-00*_20150320
 			struct dsi_panel_cmds *pcmds, u32 flags)
 {
@@ -269,11 +296,60 @@ static void mdss_dsi_panel_bklt_dcs(struct mdss_dsi_ctrl_pdata *ctrl, int level)
 	memset(&cmdreq, 0, sizeof(cmdreq));
 	cmdreq.cmds = &backlight_cmd;
 	cmdreq.cmds_cnt = 1;
-	cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL;
+	cmdreq.flags = CMD_REQ_COMMIT;
 	cmdreq.rlen = 0;
 	cmdreq.cb = NULL;
 
 	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
+}
+
+static void mdss_dsi_panel_set_idle_mode(struct mdss_panel_data *pdata,
+							bool enable)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl = NULL;
+
+	if (pdata == NULL) {
+		pr_err("%s: Invalid input data\n", __func__);
+		return;
+	}
+
+	ctrl = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+						panel_data);
+
+	pr_debug("%s: Idle (%d->%d)\n", __func__, ctrl->idle, enable);
+
+	if (ctrl->idle == enable)
+		return;
+
+	if (enable) {
+		if (ctrl->idle_on_cmds.cmd_cnt) {
+			mdss_dsi_panel_cmds_send(ctrl, &ctrl->idle_on_cmds,
+					CMD_REQ_COMMIT);
+			ctrl->idle = true;
+			pr_debug("Idle on\n");
+		}
+	} else {
+		if (ctrl->idle_off_cmds.cmd_cnt) {
+			mdss_dsi_panel_cmds_send(ctrl, &ctrl->idle_off_cmds,
+					CMD_REQ_COMMIT);
+			ctrl->idle = false;
+			pr_debug("Idle off\n");
+		}
+	}
+}
+
+static bool mdss_dsi_panel_get_idle_mode(struct mdss_panel_data *pdata)
+
+{
+	struct mdss_dsi_ctrl_pdata *ctrl = NULL;
+
+	if (pdata == NULL) {
+		pr_err("%s: Invalid input data\n", __func__);
+		return 0;
+	}
+	ctrl = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+						panel_data);
+	return ctrl->idle;
 }
 
 static int mdss_dsi_request_gpios(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
@@ -350,6 +426,36 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 				panel_data);
 
 	pinfo = &(ctrl_pdata->panel_data.panel_info);
+
+	/* need to configure intf mux only for external interface */
+	if (pinfo->is_dba_panel) {
+		if (enable) {
+			if (gpio_is_valid(ctrl_pdata->intf_mux_gpio)) {
+				rc = gpio_request(ctrl_pdata->intf_mux_gpio,
+						"intf_mux");
+				if (rc) {
+					pr_err("request mux gpio failed, rc=%d\n",
+									rc);
+					return rc;
+				}
+				rc = gpio_direction_output(
+					ctrl_pdata->intf_mux_gpio, 0);
+				if (rc) {
+					pr_err("%s: unable to set dir for intf mux gpio\n",
+								__func__);
+					goto exit;
+				}
+				gpio_set_value(ctrl_pdata->intf_mux_gpio, 0);
+			} else {
+				pr_debug("%s:%d, intf mux gpio not specified\n",
+							__func__, __LINE__);
+			}
+		} else {
+			if (gpio_is_valid(ctrl_pdata->intf_mux_gpio))
+				gpio_free(ctrl_pdata->intf_mux_gpio);
+		}
+	}
+
 	if ((mdss_dsi_is_right_ctrl(ctrl_pdata) &&
 		mdss_dsi_is_hw_config_split(ctrl_pdata->shared_data)) ||
 			pinfo->is_dba_panel) {
@@ -412,6 +518,11 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 			for (i = 0; i < pdata->panel_info.rst_seq_len; ++i) {
 				gpio_set_value((ctrl_pdata->rst_gpio),
 					pdata->panel_info.rst_seq[i]);
+				if(pdata->panel_info.pid == FIH_SHARP_FT8607_720P_VIDEO_PANEL && i == (pdata->panel_info.rst_seq_len -1))
+				{
+					pr_debug("\n\n******************** [HL] %s, i = %d *****PULL HIGH tp reset***********\n\n", __func__, i);
+					gpio_set_value((ctrl_pdata->tp_reset_gpio), 1);
+				}
 				if (pdata->panel_info.rst_seq[++i])
 					usleep_range(pinfo->rst_seq[i] * 1000, pinfo->rst_seq[i] * 1000);
 				pr_debug("\n\n******************** [HL] %s, i = %d **********************\n\n", __func__, i);
@@ -547,7 +658,7 @@ static void mdss_dsi_send_col_page_addr(struct mdss_dsi_ctrl_pdata *ctrl,
 
 	memset(&cmdreq, 0, sizeof(cmdreq));
 	cmdreq.cmds_cnt = 2;
-	cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL;
+	cmdreq.flags = CMD_REQ_COMMIT;
 	if (unicast)
 		cmdreq.flags |= CMD_REQ_UNICAST;
 	cmdreq.rlen = 0;
@@ -668,6 +779,38 @@ end:
 	return 0;
 }
 
+static int mdss_dsi_panel_apply_display_setting(struct mdss_panel_data *pdata,
+							u32 mode)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl = NULL;
+	struct dsi_panel_cmds *lp_on_cmds;
+	struct dsi_panel_cmds *lp_off_cmds;
+
+	if (pdata == NULL) {
+		pr_err("%s: Invalid input data\n", __func__);
+		return -EINVAL;
+	}
+
+	ctrl = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+				panel_data);
+
+	lp_on_cmds = &ctrl->lp_on_cmds;
+	lp_off_cmds = &ctrl->lp_off_cmds;
+
+	/* Apply display settings for low-persistence mode */
+	if ((mode == MDSS_PANEL_LOW_PERSIST_MODE_ON) &&
+				(lp_on_cmds->cmd_cnt))
+			mdss_dsi_panel_apply_settings(ctrl, lp_on_cmds);
+	else if ((mode == MDSS_PANEL_LOW_PERSIST_MODE_OFF) &&
+			(lp_on_cmds->cmd_cnt))
+		mdss_dsi_panel_apply_settings(ctrl, lp_off_cmds);
+	else
+		return -EINVAL;
+
+	pr_debug("%s: Persistence mode %d applied\n", __func__, mode);
+	return 0;
+}
+
 static void mdss_dsi_panel_switch_mode(struct mdss_panel_data *pdata,
 							int mode)
 {
@@ -755,7 +898,33 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
-	//Display-ImplementCECTCABC-00+{_20160126
+	//Display-FixCeCtNotWorkInAndroidO-FixedValueSinceNoUIForCeCtAlready-00+{_20171107
+	if ((strstr(saved_command_line, "androidboot.device=D1C")!=NULL) || (strstr(saved_command_line, "androidboot.device=ND1")!=NULL))
+	{
+		if (strstr(saved_command_line, "androidboot.fihmode=0")!=NULL)	//Display-FixCABCCanNotWorkInAndroidO-00*_20171020
+		{
+			pr_debug("[HL]%s: SetDefaultCeCtRightAfterBoot = %d\n", __func__, SetDefaultCeCtRightAfterBoot);
+			if (SetDefaultCeCtRightAfterBoot)
+			{
+					res = mdss_dsi_panel_ce_onoff(ctrl_pdata, default_ce);
+					if (!res)	 //Display-EnhanceErrorHandling-00*_20150320
+					{
+						BBOX_LCM_OEM_FUNCTIONS_FAIL //Display-BBox-03+_20161028
+					}
+						
+					res = mdss_dsi_panel_ct_set(ctrl_pdata, default_ct);
+					if (!res)	 //Display-EnhanceErrorHandling-00*_20150320
+					{
+						BBOX_LCM_OEM_FUNCTIONS_FAIL //Display-BBox-03+_20161028
+					}				
+					
+					SetDefaultCeCtRightAfterBoot = 0;
+			}
+		}
+	}
+	//Display-FixCeCtNotWorkInAndroidO-FixedValueSinceNoUIForCeCtAlready-00+}_20171107
+	
+	//Display-ImplementCECTCABC-00+{_20160126	
 	if (SendCEOnlyAfterResume)
 	{
 		res = mdss_dsi_panel_ce_onoff(ctrl_pdata, ce_en);
@@ -875,6 +1044,22 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 	pr_debug("[HL]%s: <-- end\n", __func__);
 }
 
+#ifdef TARGET_HW_MDSS_HDMI
+static void mdss_dsi_panel_on_hdmi(struct mdss_dsi_ctrl_pdata *ctrl,
+			struct mdss_panel_info *pinfo)
+{
+	if (ctrl->ds_registered)
+		mdss_dba_utils_video_on(pinfo->dba_data, pinfo);
+}
+#else
+static void mdss_dsi_panel_on_hdmi(struct mdss_dsi_ctrl_pdata *ctrl,
+			struct mdss_panel_info *pinfo)
+{
+	(void)(*ctrl);
+	(void)(*pinfo);
+}
+#endif
+
 static char power_status_reg[2] = {0x0A, 0x00};	//Display-ShowLCMAndBacklightStatus-00+_20160304
 static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 {
@@ -958,29 +1143,33 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 		}
 		//Display-RotateImageOnlyForNB1Project+}_20160321
 
+		//Display-FixCeCtNotWorkInAndroidO-FixedValueSinceNoUIForCeCtAlready-00*{_20171107
 		//Display-moveFeatureBeforeInitCommand start
 		if (strstr(saved_command_line, "androidboot.device=ND1")!=NULL)
 		{
-			if (strstr(saved_command_line, "androidboot.mode=0")!=NULL)
+			if (strstr(saved_command_line, "androidboot.fihmode=0")!=NULL)	//Display-FixCABCCanNotWorkInAndroidO-00*_20171020
 			{
+				pr_debug("[HL]%s: default_ce = %ld\n", __func__, default_ce);
+				pr_debug("[HL]%s: default_ct = %ld\n", __func__, default_ct);
+				
 				if (SendCEBeforeInit)
 				{
-					res = mdss_dsi_panel_ce_onoff_BeforeInit(ctrl, ce_en);
+					res = mdss_dsi_panel_ce_onoff_BeforeInit(ctrl, default_ce);
 					if (!res)
 					{
 						BBOX_LCM_OEM_FUNCTIONS_FAIL
 					}
-					pr_debug("\n\n******************** [JSH] %s: mdss_dsi_panel_ce_onoff(ctrl_pdata, ce_en) **********************\n\n",__func__);
+					pr_debug("\n\n******************** [JSH] %s: mdss_dsi_panel_ce_onoff(ctrl_pdata, default_ce) **********************\n\n",__func__);
 				}
 
 				if (SendCTBeforeInit)
 				{
-					res = mdss_dsi_panel_ct_set_BeforeInit(ctrl, ct_set);
+					res = mdss_dsi_panel_ct_set_BeforeInit(ctrl, default_ct);
 					if (!res)
 					{
 						BBOX_LCM_OEM_FUNCTIONS_FAIL
 					}
-					pr_debug("\n\n******************** [JSH] %s: mdss_dsi_panel_ct_set(ctrl_pdata, ct_set) **********************\n\n",__func__);
+					pr_debug("\n\n******************** [JSH] %s: mdss_dsi_panel_ct_set(ctrl_pdata, default_ct) **********************\n\n",__func__);
 				}
 
 				if (SendCABCBeforeInit)
@@ -995,7 +1184,8 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 			}
 		}
 		//Display-moveFeatureBeforeInitCommand end
-
+		//Display-FixCeCtNotWorkInAndroidO-FixedValueSinceNoUIForCeCtAlready-00*}_20171107
+		
 		//Display-EnhanceErrorHandling-00*{_20150320
 		len = mdss_dsi_panel_cmds_send(ctrl, on_cmds, CMD_REQ_COMMIT);
 		if (!len)
@@ -1006,10 +1196,49 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 
 		DispOff = 0;	//Display-NT35597-Fix_JGR-5432-AvoidCabcOffCmdIsSentDuring0x28And0x11Cmd-00+_20160601
 
-		if ((strstr(saved_command_line, "androidboot.device=D1C")!=NULL) || strstr(saved_command_line, "androidboot.device=PLE")!=NULL)
+		//Display-FixCeCtNotWorkInAndroidO-FixedValueSinceNoUIForCeCtAlready-00*{_20171107
+		if ((strstr(saved_command_line, "androidboot.device=D1C")!=NULL))
 		{
-			if (strstr(saved_command_line, "androidboot.mode=0")!=NULL)
+			if (strstr(saved_command_line, "androidboot.fihmode=0")!=NULL)	//Display-FixCABCCanNotWorkInAndroidO-00*_20171020
 			{
+				pr_debug("[HL]%s: default_ce = %ld\n", __func__, default_ce);
+				pr_debug("[HL]%s: default_ct = %ld\n", __func__, default_ct);
+			
+				if (SendCEBeforeInit)
+				{
+					res = mdss_dsi_panel_ce_onoff_BeforeInit(ctrl, default_ce);
+					if (!res)
+					{
+						BBOX_LCM_OEM_FUNCTIONS_FAIL
+					}
+					pr_debug("\n\n******************** [HL] %s: AFTER 0x11 and 0x29, mdss_dsi_panel_ce_onoff(ctrl_pdata, default_ce) **********************\n\n",__func__);
+				}
+
+				if (SendCTBeforeInit)
+				{
+					res = mdss_dsi_panel_ct_set_BeforeInit(ctrl, default_ct);
+					if (!res)
+					{
+						BBOX_LCM_OEM_FUNCTIONS_FAIL
+					}
+					pr_debug("\n\n******************** [HL] %s: AFTER 0x11 and 0x29, mdss_dsi_panel_ct_set(ctrl_pdata, (ctrl, default_ct)) **********************\n\n",__func__);
+				}
+
+				if (SendCABCBeforeInit)
+				{
+					res = mdss_dsi_panel_cabc_set_BeforeInit(ctrl, cabc_set);
+					if (!res)
+					{
+						BBOX_LCM_OEM_FUNCTIONS_FAIL
+					}
+					pr_debug("\n\n******************** [HL] %s: AFTER 0x11 and 0x29, mdss_dsi_panel_cabc_set(ctrl_pdata, cabc_set) **********************\n\n",__func__);
+				}
+			}
+		}
+		else if (strstr(saved_command_line, "androidboot.device=PLE")!=NULL)
+		{
+			if (strstr(saved_command_line, "androidboot.fihmode=0")!=NULL)	//Display-FixCABCCanNotWorkInAndroidO-00*_20171020
+			{			
 				if (SendCEBeforeInit)
 				{
 					res = mdss_dsi_panel_ce_onoff_BeforeInit(ctrl, ce_en);
@@ -1041,7 +1270,8 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 				}
 			}
 		}
-
+	//Display-FixCeCtNotWorkInAndroidO-FixedValueSinceNoUIForCeCtAlready-00*}_20171107
+	
 		//Display-RotateImageOnlyForNB1Project+{_20160321
 		if(!(strnstr(saved_command_line, "androidboot.mode=2", strlen(saved_command_line))) && ((strstr(saved_command_line, "androidboot.device=D1C")!=NULL) || (strstr(saved_command_line, "androidboot.device=PLE")!=NULL)))
 		{
@@ -1094,8 +1324,11 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 	if (pinfo->compression_mode == COMPRESSION_DSC)
 		mdss_dsi_panel_dsc_pps_send(ctrl, pinfo);
 
-	if (ctrl->ds_registered)
-		mdss_dba_utils_video_on(pinfo->dba_data, pinfo);
+	mdss_dsi_panel_on_hdmi(ctrl, pinfo);
+
+	/* Ensure low persistence mode is set as before */
+	mdss_dsi_panel_apply_display_setting(pdata, pinfo->persist_mode);
+
 end:
 	pr_debug("%s:-\n", __func__);
 //Display-EnhanceErrorHandling-00*{_20150320
@@ -1112,12 +1345,30 @@ power_status_not_0a_fail:
 //Display-EnhanceErrorHandling-00*}_20150320
 }
 
+#ifdef TARGET_HW_MDSS_HDMI
+static void mdss_dsi_post_panel_on_hdmi(struct mdss_panel_info *pinfo)
+{
+	u32 vsync_period = 0;
+
+	if (pinfo->is_dba_panel && pinfo->is_pluggable) {
+		/* ensure at least 1 frame transfers to down stream device */
+		vsync_period = (MSEC_PER_SEC / pinfo->mipi.frame_rate) + 1;
+		msleep(vsync_period);
+		mdss_dba_utils_hdcp_enable(pinfo->dba_data, true);
+	}
+}
+#else
+static void mdss_dsi_post_panel_on_hdmi(struct mdss_panel_info *pinfo)
+{
+	(void)(*pinfo);
+}
+#endif
+
 static int mdss_dsi_post_panel_on(struct mdss_panel_data *pdata)
 {
 	struct mdss_dsi_ctrl_pdata *ctrl = NULL;
 	struct mdss_panel_info *pinfo;
 	struct dsi_panel_cmds *cmds;
-	u32 vsync_period = 0;
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -1139,17 +1390,30 @@ static int mdss_dsi_post_panel_on(struct mdss_panel_data *pdata)
 		mdss_dsi_panel_cmds_send(ctrl, cmds, CMD_REQ_COMMIT);
 	}
 
-	if (pinfo->is_dba_panel && pinfo->is_pluggable) {
-		/* ensure at least 1 frame transfers to down stream device */
-		vsync_period = (MSEC_PER_SEC / pinfo->mipi.frame_rate) + 1;
-		msleep(vsync_period);
-		mdss_dba_utils_hdcp_enable(pinfo->dba_data, true);
-	}
+	mdss_dsi_post_panel_on_hdmi(pinfo);
 
 end:
 	pr_debug("%s:-\n", __func__);
 	return 0;
 }
+
+#ifdef TARGET_HW_MDSS_HDMI
+static void mdss_dsi_panel_off_hdmi(struct mdss_dsi_ctrl_pdata *ctrl,
+			struct mdss_panel_info *pinfo)
+{
+	if (ctrl->ds_registered && pinfo->is_pluggable) {
+		mdss_dba_utils_video_off(pinfo->dba_data);
+		mdss_dba_utils_hdcp_enable(pinfo->dba_data, false);
+	}
+}
+#else
+static void mdss_dsi_panel_off_hdmi(struct mdss_dsi_ctrl_pdata *ctrl,
+			struct mdss_panel_info *pinfo)
+{
+	(void)(*ctrl);
+	(void)(*pinfo);
+}
+#endif
 
 static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 {
@@ -1195,12 +1459,11 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 	fih_get_panel_status(ctrl);
 	//gatycclu - MA3-589 - Show Driver IC status}
 
-	if (ctrl->ds_registered && pinfo->is_pluggable) {
-		mdss_dba_utils_video_off(pinfo->dba_data);
-		mdss_dba_utils_hdcp_enable(pinfo->dba_data, false);
-	}
+	mdss_dsi_panel_off_hdmi(ctrl, pinfo);
 
 end:
+	/* clear idle state */
+	ctrl->idle = false;
 	pr_debug("%s:-\n", __func__);
 	return 0;
 
@@ -1295,6 +1558,8 @@ static int mdss_dsi_panel_ce_onoff_BeforeInit(struct mdss_dsi_ctrl_pdata *ctrl_p
 		return -EINVAL;
 	}
 
+	ce_status = enable;	//Display-FixCeCtNotWorkInAndroidO-FixedValueSinceNoUIForCeCtAlready-00+_20171107
+
 	pr_debug("\n\n******************** [HL] %s ---, len = %d **********************\n\n", __func__, len);
 
 	return len;
@@ -1349,6 +1614,7 @@ static int mdss_dsi_panel_cabc_set_BeforeInit(struct mdss_dsi_ctrl_pdata *ctrl_p
 	int image_enhance = 0;
 
 	pr_debug("\n\n*** [HL] %s, value = %ld ***\n\n", __func__,value);
+	pr_debug("[HL]%s: ce_status = %d\n", __func__, ce_status);
 
 	switch (ctrl_pdata->panel_data.panel_info.pid)
 	{
@@ -1873,7 +2139,11 @@ static int mdss_dsi_panel_low_power_config(struct mdss_panel_data *pdata,
 		enable);
 
 	/* Any panel specific low power commands/config */
-
+	/* Control idle mode for panel */
+	if (enable)
+		mdss_dsi_panel_set_idle_mode(pdata, true);
+	else
+		mdss_dsi_panel_set_idle_mode(pdata, false);
 	pr_debug("%s:-\n", __func__);
 	return 0;
 }
@@ -2923,6 +3193,12 @@ static int mdss_dsi_parse_panel_features(struct device_node *np,
 					__func__, __LINE__);
 	}
 
+	mdss_dsi_parse_dcs_cmds(np, &ctrl->lp_on_cmds,
+			"qcom,mdss-dsi-lp-mode-on", NULL);
+
+	mdss_dsi_parse_dcs_cmds(np, &ctrl->lp_off_cmds,
+			"qcom,mdss-dsi-lp-mode-off", NULL);
+
 	return 0;
 }
 
@@ -3403,14 +3679,47 @@ exit:
 	return rc;
 }
 
+#ifdef TARGET_HW_MDSS_HDMI
+static int mdss_panel_parse_dt_hdmi(struct device_node *np,
+			struct mdss_dsi_ctrl_pdata *ctrl_pdata)
+{
+	int len = 0;
+	const char *bridge_chip_name;
+	struct mdss_panel_info *pinfo = &(ctrl_pdata->panel_data.panel_info);
+
+	pinfo->is_dba_panel = of_property_read_bool(np,
+			"qcom,dba-panel");
+
+	if (pinfo->is_dba_panel) {
+		bridge_chip_name = of_get_property(np,
+			"qcom,bridge-name", &len);
+		if (!bridge_chip_name || len <= 0) {
+			pr_err("%s:%d Unable to read qcom,bridge_name, data=%pK,len=%d\n",
+				__func__, __LINE__, bridge_chip_name, len);
+			return -EINVAL;
+		}
+		strlcpy(ctrl_pdata->bridge_name, bridge_chip_name,
+			MSM_DBA_CHIP_NAME_MAX_LEN);
+	}
+	return 0;
+}
+#else
+static int mdss_panel_parse_dt_hdmi(struct device_node *np,
+			struct mdss_dsi_ctrl_pdata *ctrl_pdata)
+{
+	(void)(*np);
+	(void)(*ctrl_pdata);
+	return 0;
+}
+#endif
 static int mdss_panel_parse_dt(struct device_node *np,
 			struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
 	u32 tmp;
-	int rc, len = 0;
+	u8 lanes = 0;
+	int rc = 0;
 	const char *data;
 	static const char *pdest;
-	const char *bridge_chip_name;
 	struct mdss_panel_info *pinfo = &(ctrl_pdata->panel_data.panel_info);
 
 	pr_debug("\n\n******************** [HL] %s +++ **********************\n\n", __func__);
@@ -3583,6 +3892,20 @@ static int mdss_panel_parse_dt(struct device_node *np,
 	pinfo->mipi.data_lane3 = of_property_read_bool(np,
 		"qcom,mdss-dsi-lane-3-state");
 
+	if (pinfo->mipi.data_lane0)
+		lanes++;
+	if (pinfo->mipi.data_lane1)
+		lanes++;
+	if (pinfo->mipi.data_lane2)
+		lanes++;
+	if (pinfo->mipi.data_lane3)
+		lanes++;
+	/*
+	 * needed to set default lanes during
+	 * resolution switch for bridge chips
+	 */
+	pinfo->mipi.default_lanes = lanes;
+
 	rc = mdss_panel_parse_display_timings(np, &ctrl_pdata->panel_data);
 	if (rc)
 		return rc;
@@ -3631,6 +3954,17 @@ static int mdss_panel_parse_dt(struct device_node *np,
 	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->off_cmds,
 		"qcom,mdss-dsi-off-command", "qcom,mdss-dsi-off-command-state");
 
+	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->idle_on_cmds,
+		"qcom,mdss-dsi-idle-on-command",
+		"qcom,mdss-dsi-idle-on-command-state");
+
+	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->idle_off_cmds,
+		"qcom,mdss-dsi-idle-off-command",
+		"qcom,mdss-dsi-idle-off-command-state");
+
+	rc = of_property_read_u32(np, "qcom,mdss-dsi-idle-fps", &tmp);
+	pinfo->mipi.frame_rate_idle = (!rc ? tmp : 60);
+
 	rc = of_property_read_u32(np, "qcom,adjust-timer-wakeup-ms", &tmp);
 	pinfo->adjust_timer_delay_ms = (!rc ? tmp : 0);
 
@@ -3647,21 +3981,9 @@ static int mdss_panel_parse_dt(struct device_node *np,
 
 	mdss_dsi_parse_dfps_config(np, ctrl_pdata);
 
-	pinfo->is_dba_panel = of_property_read_bool(np,
-			"qcom,dba-panel");
-
-	if (pinfo->is_dba_panel) {
-		bridge_chip_name = of_get_property(np,
-			"qcom,bridge-name", &len);
-		if (!bridge_chip_name || len <= 0) {
-			pr_err("%s:%d Unable to read qcom,bridge_name, data=%pK,len=%d\n",
-				__func__, __LINE__, bridge_chip_name, len);
-			rc = -EINVAL;
-			goto error;
-		}
-		strlcpy(ctrl_pdata->bridge_name, bridge_chip_name,
-			MSM_DBA_CHIP_NAME_MAX_LEN);
-	}
+	rc = mdss_panel_parse_dt_hdmi(np, ctrl_pdata);
+	if (rc)
+		goto error;
 
 	//Display-ImplementCECTCABC-00+{_20160126
 	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->ce_on_cmds,
@@ -3781,13 +4103,16 @@ int mdss_dsi_panel_init(struct device_node *node,
 	pinfo->dynamic_switch_pending = false;
 	pinfo->is_lpm_mode = false;
 	pinfo->esd_rdy = false;
+	pinfo->persist_mode = false;
 
 	ctrl_pdata->on = mdss_dsi_panel_on;
 	ctrl_pdata->post_panel_on = mdss_dsi_post_panel_on;
 	ctrl_pdata->off = mdss_dsi_panel_off;
 	ctrl_pdata->low_power_config = mdss_dsi_panel_low_power_config;
 	ctrl_pdata->panel_data.set_backlight = mdss_dsi_panel_bl_ctrl;
+	ctrl_pdata->panel_data.apply_display_setting =
+			mdss_dsi_panel_apply_display_setting;
 	ctrl_pdata->switch_mode = mdss_dsi_panel_switch_mode;
-
+	ctrl_pdata->panel_data.get_idle = mdss_dsi_panel_get_idle_mode;
 	return 0;
 }

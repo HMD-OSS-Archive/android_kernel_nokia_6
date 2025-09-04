@@ -11,8 +11,9 @@ enum {
         FIH_PRJ_MF3 = 3,
         FIH_PRJ_D1C = 6,
         FIH_PRJ_D1 =7,
-		FIH_PRJ_VZ1 = 8,
+	FIH_PRJ_VZ1 = 8,
         FIH_PRJ_PLE = 10,
+        FIH_PRJ_OC6 = 11,
         FIH_PRJ_MAX
 };
 
@@ -93,6 +94,7 @@ enum {
 
         FIH_RF_8937_G_850_900_1800_1900_W_1_2_5_8_L_1_3_5_7_8_20_28_38_40 = 91, /*Plate APAC */
         FIH_RF_8937_G_850_900_1800_1900_W_1_2_4_5_8_L_2_3_4_7_12_17_28_38 = 92, /*Plate LATAM */
+        FIH_RF_G_900_1800_1900_W_1_2_4_8_L_1_2_3_4_7_8_20_41=40, //G1 end- Greens
 
         /* NO BAND */
         FIH_RF_NONE = 240, /* RF_BAND-ID = 0 */

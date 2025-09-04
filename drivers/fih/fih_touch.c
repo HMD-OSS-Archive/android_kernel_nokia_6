@@ -7,6 +7,8 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/uaccess.h>
+#include <linux/delay.h>
+#include <linux/slab.h>
 #include "fih_touch.h"
 
 #define FIH_PROC_DIR        "AllHWList"
@@ -249,6 +251,41 @@ static int fih_touch_upgrade_proc_open(struct inode *inode, struct file *file)
 static ssize_t fih_touch_upgrade_proc_write(struct file *file, const char __user *buffer,
 	size_t count, loff_t *ppos)
 {
+	char *buf;
+	unsigned int res, input = 0;
+
+	if (touch_cb.touch_fwupgrade == NULL)
+		return -EINVAL;
+
+	if (count < 1)
+		return -EINVAL;
+
+	buf = kzalloc(count, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	if (copy_from_user(buf, buffer, count))
+		return -EFAULT;
+	input = simple_strtoul(buf, NULL, 10);
+
+	if (touch_cb.touch_fwupgrade != NULL)
+	{
+		pr_info("F@Touch FW upgrade\n");
+		touch_cb.touch_fwupgrade(input);
+	}
+
+	if (res < 0)
+	{
+		kfree(buf);
+		return res;
+	}
+
+	kfree(buf);
+
+	/* claim that we wrote everything */
+	return count;
+	//////////////////////////////
+	#if 0
 	int input;
 
 	if (sscanf(buffer, "%u", &input) != 1)
@@ -262,6 +299,7 @@ static ssize_t fih_touch_upgrade_proc_write(struct file *file, const char __user
 		touch_cb.touch_fwupgrade(input);
 	}
 	return count;
+	#endif
 }
 
 static struct file_operations touch_upgrade_proc_file_ops = {
@@ -355,6 +393,41 @@ static int fih_touch_gesture_proc_open(struct inode *inode, struct file *file)
 static ssize_t fih_touch_gesture_proc_write(struct file *file, const char __user *buffer,
 	size_t count, loff_t *ppos)
 {
+	char *buf;
+	unsigned int res, input = 0;
+
+	if (touch_cb.touch_gesture_write == NULL)
+		return -EINVAL;
+
+	if (count < 1)
+		return -EINVAL;
+
+	buf = kzalloc(count, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	if (copy_from_user(buf, buffer, count))
+		return -EFAULT;
+	input = simple_strtoul(buf, NULL, 10);
+
+	if (touch_cb.touch_gesture_write != NULL)
+	{
+		pr_info("F@Touch Write Touch Gesture(%d)\n", input);
+		touch_cb.touch_gesture_write(input);
+	}
+
+	if (res < 0)
+	{
+		kfree(buf);
+		return res;
+	}
+
+	kfree(buf);
+
+	/* claim that we wrote everything */
+	return count;
+	//////////////////////////////
+#if 0
 	int input;
 
 	if (sscanf(buffer, "%u", &input) != 1)
@@ -368,6 +441,7 @@ static ssize_t fih_touch_gesture_proc_write(struct file *file, const char __user
 		touch_cb.touch_gesture_write(input);
 	}
 	return count;
+#endif
 }
 
 static struct file_operations touch_gesture_proc_file_ops = {

@@ -128,7 +128,7 @@ static void fih_dram_setup_MEM(void)
 
 	switch (dram.mfr_id) {
 		case 0x01: strcat(buf, "SAMSUNG"); break;
-		case 0x03: strcat(buf, "ELPIDA"); break;
+		case 0x03: strcat(buf, "MICRON"); break;
 		case 0x06: strcat(buf, "SK-HYNIX"); break;
 		case 0xFF: strcat(buf, "MICRON"); break;
 		default: strcat(buf, "UNKNOWN"); break;

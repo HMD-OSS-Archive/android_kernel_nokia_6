@@ -16,6 +16,7 @@
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/stat.h>
+#include <linux/of.h>
 #include <linux/pm_runtime.h>
 
 #include <linux/mmc/card.h>
@@ -166,16 +167,22 @@ static int mmc_bus_suspend(struct device *dev)
 			return ret;
 	}
 
-	if(mmc_card_sd(card))
-		pr_err("%s %s Enter - needs_resume(%x)\n", mmc_hostname(host),__func__,
-			mmc_bus_needs_resume(host));
-
 	if (mmc_bus_needs_resume(host))
 		return 0;
 	ret = host->bus_ops->suspend(host);
 
-	if(mmc_card_sd(card))
-		pr_err("%s %s Exit=%d\n", mmc_hostname(host),__func__,ret);
+	/*
+	 * bus_ops->suspend may fail due to some reason
+	 * In such cases if we return error to PM framework
+	 * from here without calling drv->resume then mmc
+	 * request may get stuck since PM framework will assume
+	 * that mmc bus is not suspended (because of error) and
+	 * it won't call resume again.
+	 *
+	 * So in case of error call drv->resume.
+	 */
+	if (ret && dev->driver && drv->resume)
+		drv->resume(card);
 
 	return ret;
 }
@@ -187,9 +194,6 @@ static int mmc_bus_resume(struct device *dev)
 	struct mmc_host *host = card->host;
 	int ret;
 
-	if(mmc_card_sd(card))
-		pr_err("%s %s Enter - manual_resume(%x)\n", mmc_hostname(host),__func__,
-			mmc_bus_manual_resume(host));
 	if (mmc_bus_manual_resume(host)) {
 		host->bus_resume_flags |= MMC_BUSRESUME_NEEDS_RESUME;
 		goto skip_full_resume;
@@ -204,9 +208,6 @@ skip_full_resume:
 	if (dev->driver && drv->resume)
 		ret = drv->resume(card);
 
-	if(mmc_card_sd(card))
-		pr_err("%s %s Exit=%d\n", mmc_hostname(host),__func__,ret);
-
 	return ret;
 }
 #endif
@@ -216,10 +217,6 @@ static int mmc_runtime_suspend(struct device *dev)
 {
 	struct mmc_card *card = mmc_dev_to_card(dev);
 	struct mmc_host *host = card->host;
-
-	if(mmc_card_sd(card))
-		pr_err("%s %s needs_resume(%x)\n", mmc_hostname(host),__func__,
-			mmc_bus_needs_resume(host));
 
 	if (mmc_bus_needs_resume(host))
 		return 0;
@@ -231,10 +228,6 @@ static int mmc_runtime_resume(struct device *dev)
 {
 	struct mmc_card *card = mmc_dev_to_card(dev);
 	struct mmc_host *host = card->host;
-
-	if(mmc_card_sd(card))
-		pr_err("%s %s needs_resume(%x)\n", mmc_hostname(host),__func__,
-			mmc_bus_needs_resume(host));
 
 	if (mmc_bus_needs_resume(host))
 		host->bus_resume_flags &= ~MMC_BUSRESUME_NEEDS_RESUME;
@@ -408,11 +401,15 @@ int mmc_add_card(struct mmc_card *card)
 			pr_err("%s: %s: failed to init wakeup: %d\n",
 			       mmc_hostname(card->host), __func__, ret);
 	}
+
+	card->dev.of_node = mmc_of_find_child_device(card->host, 0);
+
 	ret = device_add(&card->dev);
 	if (ret)
 		return ret;
 
 	mmc_card_set_present(card);
+	device_enable_async_suspend(&card->dev);
 
 	return 0;
 }
@@ -436,6 +433,7 @@ void mmc_remove_card(struct mmc_card *card)
 				mmc_hostname(card->host), card->rca);
 		}
 		device_del(&card->dev);
+		of_node_put(card->dev.of_node);
 	}
 
 	kfree(card->wr_pack_stats.packing_events);

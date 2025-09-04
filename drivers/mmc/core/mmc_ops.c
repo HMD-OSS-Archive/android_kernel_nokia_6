@@ -102,11 +102,8 @@ static int _mmc_select_card(struct mmc_host *host, struct mmc_card *card)
 	}
 
 	err = mmc_wait_for_cmd(host, &cmd, MMC_CMD_RETRIES);
-	if (err){
-		pr_err("%s %s Failed with err %d\n",
-			mmc_hostname(host),__func__,err);
+	if (err)
 		return err;
-	}
 
 	return 0;
 }

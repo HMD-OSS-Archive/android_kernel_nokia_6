@@ -140,8 +140,6 @@ source "drivers/staging/Kconfig"
 
 source "drivers/platform/Kconfig"
 
-source "drivers/soc/Kconfig"
-
 source "drivers/clk/Kconfig"
 
 source "drivers/hwspinlock/Kconfig"
@@ -197,6 +195,8 @@ source "drivers/sensors/Kconfig"
 source "drivers/firmware/Kconfig"
 
 source "drivers/bif/Kconfig"
+
+source "drivers/cclogic/Kconfig"
 
 #fih driver
 source "drivers/fih/Kconfig"

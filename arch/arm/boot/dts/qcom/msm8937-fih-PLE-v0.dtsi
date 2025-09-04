@@ -20,6 +20,21 @@
 /* Pstore:last kmsg */
 #include "components/memmap/msm8937-memory-pstore.dtsi"
 
+/* Disable Vendor partition */
+&firmware {
+  android {
+    fstab {
+      vendor {
+        status = "disabled";
+      };
+      system {
+        fsmgr_flags = "wait,verify";
+        status = "ok";
+      };
+    };
+  };
+};
+
 &wled {
 	qcom,cons-sync-write-delay-us = <1000>;
 };

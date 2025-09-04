@@ -730,15 +730,10 @@ static int mmc_sd_init_uhs_card(struct mmc_card *card)
 	 * SPI mode doesn't define CMD19 and tuning is only valid for SDR50 and
 	 * SDR104 mode SD-cards. Note that tuning is mandatory for SDR104.
 	 */
-	if (!mmc_host_is_spi(card->host) && card->host->ops->execute_tuning &&
-			(card->sd_bus_speed == UHS_SDR50_BUS_SPEED ||
-			 card->sd_bus_speed == UHS_SDR104_BUS_SPEED)) {
-		mmc_host_clk_hold(card->host);
-		err = card->host->ops->execute_tuning(card->host,
-						      MMC_SEND_TUNING_BLOCK);
-		mmc_host_clk_release(card->host);
-	}
-
+	if (!mmc_host_is_spi(card->host) &&
+	    (card->sd_bus_speed == UHS_SDR50_BUS_SPEED ||
+	     card->sd_bus_speed == UHS_SDR104_BUS_SPEED))
+		err = mmc_execute_tuning(card);
 out:
 	kfree(status);
 
@@ -1146,22 +1141,10 @@ static void mmc_sd_detect(struct mmc_host *host)
 	int retries = 5;
 #endif
 
-	pr_err("%s %s Enter\n", mmc_hostname(host),__func__);
-
 	BUG_ON(!host);
 	BUG_ON(!host->card);
 
-	/*
-	 * Try to acquire claim host. If failed to get the lock in 2 sec,
-	 * just return; This is to ensure that when this call is invoked
-	 * due to pm_suspend, not to block suspend for longer duration.
-	 */
-	if(mmc_try_get_card(host->card, 3000)){
-		pr_err("%s %s Exit Failed to get card in 3s\n", mmc_hostname(host),__func__);
-		return;
-	}
-	else
-		pr_err("%s %s acquired lock from mmc_try_claim_host\n", mmc_hostname(host),__func__);
+	mmc_get_card(host->card);
 
 	/*
 	 * Just check if our card has been removed.
@@ -1186,7 +1169,7 @@ static void mmc_sd_detect(struct mmc_host *host)
 #endif
 
 	mmc_put_card(host->card);
-	pr_err("%s %s exit\n", mmc_hostname(host),__func__);
+
 	if (err) {
 		mmc_sd_remove(host);
 
@@ -1237,21 +1220,15 @@ static int mmc_sd_suspend(struct mmc_host *host)
 	int err;
 
 	MMC_TRACE(host, "%s: Enter\n", __func__);
-	pr_err("%s %s Enter\n", mmc_hostname(host), __func__);
-	
 	err = _mmc_sd_suspend(host);
 	if (!err) {
 		pm_runtime_disable(&host->card->dev);
 		pm_runtime_set_suspended(&host->card->dev);
-		pr_err("%s pm_runtime_disable %d\n", __func__, __LINE__);
 	/* if suspend fails, force mmc_detect_change during resume */
 	} else if (mmc_bus_manual_resume(host))
 		host->ignore_bus_resume_flags = true;
-	MMC_TRACE(host, "%s: Exit err: %d\n", __func__, err);
 
-	pr_err("%s %s Exit(%d), ignore_bus_resume_flags(%d)\n", 
-		mmc_hostname(host), __func__, err, 
-		host->ignore_bus_resume_flags);
+	MMC_TRACE(host, "%s: Exit err: %d\n", __func__, err);
 
 	return err;
 }
@@ -1299,6 +1276,7 @@ static int _mmc_sd_resume(struct mmc_host *host)
 	if (err) {
 		pr_err("%s: %s: mmc_sd_init_card_failed (%d)\n",
 				mmc_hostname(host), __func__, err);
+		mmc_power_off(host);
 		goto out;
 	}
 	mmc_card_clr_suspended(host->card);
@@ -1323,17 +1301,12 @@ static int mmc_sd_resume(struct mmc_host *host)
 	int err = 0;
 
 	MMC_TRACE(host, "%s: Enter\n", __func__);
-	pr_err("%s %s Enter\n", mmc_hostname(host),__func__);
-
 	if (!(host->caps & MMC_CAP_RUNTIME_RESUME)) {
 		err = _mmc_sd_resume(host);
 		pm_runtime_set_active(&host->card->dev);
 		pm_runtime_mark_last_busy(&host->card->dev);
 	}
 	pm_runtime_enable(&host->card->dev);
-
-	pr_err("%s %s Exit(%d)\n", mmc_hostname(host),__func__,err);
-
 	MMC_TRACE(host, "%s: Exit err: %d\n", __func__, err);
 
 	return err;
@@ -1349,12 +1322,10 @@ static int mmc_sd_runtime_suspend(struct mmc_host *host)
 	if (!(host->caps & MMC_CAP_AGGRESSIVE_PM))
 		return 0;
 
-	pr_err("%s %s Enter\n", mmc_hostname(host),__func__);
 	err = _mmc_sd_suspend(host);
 	if (err)
 		pr_err("%s: error %d doing aggessive suspend\n",
 			mmc_hostname(host), err);
-	pr_err("%s %s Exit(%d)\n", mmc_hostname(host),__func__,err);
 
 	return err;
 }
@@ -1369,12 +1340,10 @@ static int mmc_sd_runtime_resume(struct mmc_host *host)
 	if (!(host->caps & (MMC_CAP_AGGRESSIVE_PM | MMC_CAP_RUNTIME_RESUME)))
 		return 0;
 
-	pr_err("%s %s Enter\n", mmc_hostname(host),__func__);
 	err = _mmc_sd_resume(host);
 	if (err)
 		pr_err("%s: error %d doing aggessive resume\n",
 			mmc_hostname(host), err);
-	pr_err("%s %s Exit(%d)\n", mmc_hostname(host),__func__,err);
 
 	return 0;
 }
