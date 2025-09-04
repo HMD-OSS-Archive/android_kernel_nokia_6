@@ -18,6 +18,13 @@
 #include "msm_cci.h"
 #include "msm_camera_dt_util.h"
 #include "fih_read_sensor_id.h"
+#define FTM
+#ifdef FTM
+#define CAMERA_MASK_S5K3L8 0X01
+#define CAMERA_MASK_S5K5E8 0X02
+
+static int32_t g_camera_ping = 0;
+#endif
 
 /* Logging macro */
 #undef CDBG
@@ -356,6 +363,42 @@ static int32_t msm_sensor_fill_ois_subdevid_by_name(
 	return rc;
 }
 
+static int32_t msm_sensor_fill_flash_subdevid_by_name(
+				struct msm_sensor_ctrl_t *s_ctrl)
+{
+	int32_t rc = 0;
+	struct device_node *src_node = NULL;
+	uint32_t val = 0;
+	int32_t *flash_subdev_id;
+	struct  msm_sensor_info_t *sensor_info;
+	struct device_node *of_node = s_ctrl->of_node;
+
+	if (!of_node)
+		return -EINVAL;
+
+	sensor_info = s_ctrl->sensordata->sensor_info;
+	flash_subdev_id = &sensor_info->subdev_id[SUB_MODULE_LED_FLASH];
+
+	*flash_subdev_id = -1;
+
+	src_node = of_parse_phandle(of_node, "qcom,led-flash-src", 0);
+	if (!src_node) {
+		CDBG("%s:%d src_node NULL\n", __func__, __LINE__);
+	} else {
+		rc = of_property_read_u32(src_node, "cell-index", &val);
+		CDBG("%s qcom,flash cell index %d, rc %d\n", __func__,
+			val, rc);
+		if (rc < 0) {
+			pr_err("%s failed %d\n", __func__, __LINE__);
+			return -EINVAL;
+		}
+		*flash_subdev_id = val;
+		of_node_put(src_node);
+		src_node = NULL;
+	}
+	return rc;
+}
+
 static int32_t msm_sensor_fill_slave_info_init_params(
 	struct msm_camera_sensor_slave_info *slave_info,
 	struct msm_sensor_info_t *sensor_info)
@@ -652,6 +695,18 @@ static void msm_sensor_fill_sensor_info(struct msm_sensor_ctrl_t *s_ctrl,
 
 	strlcpy(entity_name, s_ctrl->msm_sd.sd.entity.name, MAX_SENSOR_NAME);
 }
+
+#ifdef FTM
+static ssize_t show_camera_ping(struct device *dev,
+					struct device_attribute *attr, char *buf)
+{
+	pr_err("%s=%d", __func__, g_camera_ping);
+	return scnprintf(buf, PAGE_SIZE, "%d\n", g_camera_ping);
+}
+
+static DEVICE_ATTR(cam_ping, S_IWUSR | S_IRUGO, show_camera_ping, NULL);
+static const struct attribute *cam_ping_attrib = &dev_attr_cam_ping.attr;
+#endif
 
 /* static function definition */
 static int32_t msm_sensor_driver_is_special_support(
@@ -1077,6 +1132,7 @@ CSID_TG:
 	s_ctrl->sensordata->eeprom_name = slave_info->eeprom_name;
 	s_ctrl->sensordata->actuator_name = slave_info->actuator_name;
 	s_ctrl->sensordata->ois_name = slave_info->ois_name;
+	s_ctrl->sensordata->flash_name = slave_info->flash_name;
 	/*
 	 * Update eeporm subdevice Id by input eeprom name
 	 */
@@ -1095,6 +1151,12 @@ CSID_TG:
 	}
 
 	rc = msm_sensor_fill_ois_subdevid_by_name(s_ctrl);
+	if (rc < 0) {
+		pr_err("%s failed %d\n", __func__, __LINE__);
+		goto free_camera_info;
+	}
+
+	rc = msm_sensor_fill_flash_subdevid_by_name(s_ctrl);
 	if (rc < 0) {
 		pr_err("%s failed %d\n", __func__, __LINE__);
 		goto free_camera_info;
@@ -1120,6 +1182,17 @@ CSID_TG:
 		s_ctrl->sensordata->sensor_info->
 			subdev_id[SUB_MODULE_LED_FLASH] = -1;
 	}
+
+#ifdef FTM
+	/* Add for FIH test */
+	if(!strcmp(slave_info->sensor_name, "s5k3l8_oc6"))
+		g_camera_ping |= CAMERA_MASK_S5K3L8;
+	else if(!strcmp(slave_info->sensor_name, "s5k5e8_oc6"))
+		g_camera_ping |= CAMERA_MASK_S5K5E8;
+
+	pr_err("%s wbl E slave_info->sensor_name = %s \n", __func__, slave_info->sensor_name);
+	pr_err("%s wbl E g_camera_ping = 0x%x \n", __func__, g_camera_ping);
+#endif
 
 	/*
 	 * Create /dev/videoX node, comment for now until dummy /dev/videoX
@@ -1466,6 +1539,7 @@ static int32_t msm_sensor_driver_parse(struct msm_sensor_ctrl_t *s_ctrl)
 FREE_DT_DATA:
 	kfree(s_ctrl->sensordata->power_info.gpio_conf->gpio_num_info);
 	kfree(s_ctrl->sensordata->power_info.gpio_conf->cam_gpio_req_tbl);
+	kfree(s_ctrl->sensordata->power_info.gpio_conf->cam_gpio_set_tbl);
 	kfree(s_ctrl->sensordata->power_info.gpio_conf);
 	kfree(s_ctrl->sensordata->power_info.cam_vreg);
 	kfree(s_ctrl->sensordata);
@@ -1516,6 +1590,13 @@ static int32_t msm_sensor_driver_platform_probe(struct platform_device *pdev)
 
 	/* Fill device in power info */
 	s_ctrl->sensordata->power_info.dev = &pdev->dev;
+#ifdef FTM
+	pr_err("platform : Register sysfs, cam_ping_attrib\n");
+	rc = sysfs_create_file(&pdev->dev.kobj, cam_ping_attrib);
+	if(rc) {
+		pr_err("Cannot register sysfs, cam_ping_attrib\n");
+	}
+#endif
 	return rc;
 FREE_S_CTRL:
 	kfree(s_ctrl);
