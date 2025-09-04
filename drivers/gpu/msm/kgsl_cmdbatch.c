@@ -314,7 +314,7 @@ static void kgsl_cmdbatch_sync_fence_func(void *priv)
 {
 	unsigned long flags;
 	struct kgsl_cmdbatch_sync_event *event = priv;
- 
+
 	kgsl_cmdbatch_sync_expire(event->device, event);
 
 	trace_syncpoint_fence_expire(event->cmdbatch,
@@ -389,7 +389,7 @@ static int kgsl_cmdbatch_add_sync_fence(struct kgsl_device *device,
 		* Print a syncpoint_fence_expire trace if
 		* fence is already signaled or there is
 		* a failure in registering the fence waiter.
-		 */
+		*/
 		trace_syncpoint_fence_expire(cmdbatch, (ret < 0) ?
 				"error" : fence->name);
 	} else {
